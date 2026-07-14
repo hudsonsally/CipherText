@@ -1,0 +1,8 @@
+{
+  "name": "CRYPTX E2EE Chat",
+  "description": "A high-performance real-time chat application featuring native end-to-end encryption (E2EE) using Web Crypto API (RSA and AES-GCM) with smooth WebSocket-driven interactions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
