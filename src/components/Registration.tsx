@@ -18,21 +18,45 @@ export default function Registration({ onRegister }: RegistrationProps) {
 
     setError('');
     setIsGenerating(true);
-    setProgressText('Checking username availability...');
+    setProgressText('Checking username availability with backend node...');
 
+    let checkRes: Response;
     try {
-      // 1. Check if username is taken on the server
       const backendUrl = (import.meta as any).env.VITE_BACKEND_URL || '';
       const apiBase = backendUrl.endsWith('/') ? backendUrl.slice(0, -1) : backendUrl;
-      const checkRes = await fetch(`${apiBase}/api/users/check/${encodeURIComponent(username.trim())}`);
-      const { exists } = await checkRes.json();
-
-      if (exists) {
-        setError('Username is already taken on this node. Please pick another one.');
+      checkRes = await fetch(`${apiBase}/api/users/check/${encodeURIComponent(username.trim())}`);
+      
+      if (!checkRes.ok) {
+        const errorData = await checkRes.json().catch(() => ({}));
+        setError(`Backend node returned error (${checkRes.status}): ${errorData.detail || errorData.error || 'Connection rejected.'}`);
         setIsGenerating(false);
         return;
       }
+    } catch (fetchErr) {
+      console.error('Network/CORS Error:', fetchErr);
+      setError('Cannot connect to your backend server! Please make sure your Render/FastAPI server is awake and VITE_BACKEND_URL in your Vercel settings is correctly configured. Also ensure CORS is enabled on your backend (already added in our server.py).');
+      setIsGenerating(false);
+      return;
+    }
 
+    let exists = false;
+    try {
+      const data = await checkRes.json();
+      exists = !!data.exists;
+    } catch (parseErr) {
+      console.error('JSON Parse Error:', parseErr);
+      setError('Invalid response format received from your backend server. Please verify the API is running correctly.');
+      setIsGenerating(false);
+      return;
+    }
+
+    if (exists) {
+      setError('Username is already taken on this node. Please pick another one.');
+      setIsGenerating(false);
+      return;
+    }
+
+    try {
       // 2. Generate RSA Keypair
       setProgressText('Generating 2048-bit RSA-OAEP Key Pair locally...');
       // Small artificial delay to show progress and feel high-fidelity
@@ -47,8 +71,8 @@ export default function Registration({ onRegister }: RegistrationProps) {
       setIsGenerating(false);
       onRegister(username.trim(), keyPair, fingerprint);
     } catch (err) {
-      console.error(err);
-      setError('An error occurred during secure key generation. Please try again.');
+      console.error('Crypto error:', err);
+      setError('An error occurred during secure key generation. Please make sure you are in a Secure Context (HTTPS or localhost) and try again.');
       setIsGenerating(false);
     }
   };

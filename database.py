@@ -48,34 +48,39 @@ def rebuild_indexes():
             message_index_by_room[room_id] = []
         message_index_by_room[room_id].append(msg)
 
-# Load local JSON database
-if not is_pg and os.path.exists(DB_FILE):
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            memory_db = json.load(f)
-        if "users" not in memory_db:
-            memory_db["users"] = {}
-        if "rooms" not in memory_db:
-            memory_db["rooms"] = {}
-        if "messages" not in memory_db:
-            memory_db["messages"] = []
+def _init_fallback_db():
+    global memory_db
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                memory_db = json.load(f)
+            if "users" not in memory_db:
+                memory_db["users"] = {}
+            if "rooms" not in memory_db:
+                memory_db["rooms"] = {}
+            if "messages" not in memory_db:
+                memory_db["messages"] = []
 
-        # Mark all users offline on startup
-        for user_id in memory_db["users"]:
-            memory_db["users"][user_id]["isOnline"] = False
+            # Mark all users offline on startup
+            for user_id in memory_db["users"]:
+                memory_db["users"][user_id]["isOnline"] = False
 
-        # Ensure room lastReadMessageId structure
-        for room_id in memory_db["rooms"]:
-            if "lastReadMessageId" not in memory_db["rooms"][room_id]:
-                memory_db["rooms"][room_id]["lastReadMessageId"] = {}
+            # Ensure room lastReadMessageId structure
+            for room_id in memory_db["rooms"]:
+                if "lastReadMessageId" not in memory_db["rooms"][room_id]:
+                    memory_db["rooms"][room_id]["lastReadMessageId"] = {}
 
+            rebuild_indexes()
+            logger.info(f"[DATABASE] Loaded fallback JSON DB. Users: {len(memory_db['users'])}, Rooms: {len(memory_db['rooms'])}, Messages: {len(memory_db['messages'])}")
+        except Exception as e:
+            logger.error(f"[DATABASE] Error loading fallback DB: {e}")
+            rebuild_indexes()
+    else:
         rebuild_indexes()
-        logger.info(f"[DATABASE] Loaded JSON DB. Users: {len(memory_db['users'])}, Rooms: {len(memory_db['rooms'])}, Messages: {len(memory_db['messages'])}")
-    except Exception as e:
-        logger.error(f"[DATABASE] Error loading fallback DB: {e}")
-        rebuild_indexes()
-elif not is_pg:
-    rebuild_indexes()
+
+# Load local JSON database initially if not using PG
+if not is_pg:
+    _init_fallback_db()
 
 is_saving = False
 needs_save_again = False
@@ -211,8 +216,30 @@ class DatabaseService:
                 await conn.execute("UPDATE users SET is_online = false")
                 logger.info("[DATABASE] Migrations executed and user statuses reset successfully.")
         except Exception as e:
-            logger.error(f"[DATABASE] Migration error, falling back to JSON: {e}")
+            # Print a beautiful and highly visible developer error/diagnostic guide for resume reviewers
+            url = DATABASE_URL or ""
+            is_supabase_direct = "db.supabase.co" in url or "supabase.co:5432" in url
+            is_ipv6_msg = "does not appear to be an IPv4 or IPv6 address" in str(e)
+            
+            if is_supabase_direct or is_ipv6_msg:
+                logger.error("\n" + "="*80 + "\n"
+                             "🚨 DATABASE CONFIGURATION WARNING (IPv6 DIRECT VS IPV4 POOLER):\n"
+                             "It looks like you are attempting to connect to a direct Supabase host ('db.xxxx.supabase.co')\n"
+                             "on port 5432. Since early 2024, Supabase has operated on IPv6-only for direct connections.\n"
+                             "Many hosting environments (including Render, AWS ECS/Fargate, and basic hosting providers)\n"
+                             "do not support IPv6 routing by default, causing this asyncpg connection error.\n\n"
+                             "👉 HOW TO FIX THIS IN RENDER / PRODUCTION:\n"
+                             "1. Go to your Supabase project dashboard -> Settings -> Database.\n"
+                             "2. Scroll down to 'Connection string', select 'URI', and make sure 'Pooler' is selected.\n"
+                             "3. Copy the URL. It will use the '*.pooler.supabase.com' host on port 6543 (Transaction mode).\n"
+                             "4. Update your DATABASE_URL environment variable in your Render settings with this pooler URL.\n"
+                             "   (e.g., postgresql://postgres.xxxx:[pwd]@aws-0-xxxx.pooler.supabase.com:6543/postgres?sslmode=require)\n"
+                             + "="*80 + "\n")
+            else:
+                logger.error(f"[DATABASE] Database connection failed. Falling back to memory/JSON storage mode: {e}")
+            
             pool = None
+            _init_fallback_db()
 
     # USERS
     async def get_user_by_id(self, user_id: str) -> Optional[dict]:
