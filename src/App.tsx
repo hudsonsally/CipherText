@@ -55,7 +55,9 @@ export default function App() {
 
     async function fetchHistoricalMessages() {
       try {
-        const res = await fetch(`/api/rooms/${activeRoomId}/messages`);
+        const backendUrl = (import.meta as any).env.VITE_BACKEND_URL || '';
+        const apiBase = backendUrl.endsWith('/') ? backendUrl.slice(0, -1) : backendUrl;
+        const res = await fetch(`${apiBase}/api/rooms/${activeRoomId}/messages`);
         const data = await res.json();
         setMessages(data.messages || []);
       } catch (err) {
@@ -106,8 +108,18 @@ export default function App() {
     setIsConnecting(true);
     setErrorMsg('');
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const backendUrl = (import.meta as any).env.VITE_BACKEND_URL || '';
+    let wsUrl: string;
+    
+    if (backendUrl) {
+      const normalized = backendUrl.endsWith('/') ? backendUrl.slice(0, -1) : backendUrl;
+      const wsProtocol = normalized.startsWith('https') ? 'wss' : 'ws';
+      const host = normalized.replace(/^https?:\/\//, '');
+      wsUrl = `${wsProtocol}://${host}/ws`;
+    } else {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      wsUrl = `${protocol}//${window.location.host}/ws`;
+    }
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

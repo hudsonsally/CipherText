@@ -22,7 +22,9 @@ export default function Registration({ onRegister }: RegistrationProps) {
 
     try {
       // 1. Check if username is taken on the server
-      const checkRes = await fetch(`/api/users/check/${encodeURIComponent(username.trim())}`);
+      const backendUrl = (import.meta as any).env.VITE_BACKEND_URL || '';
+      const apiBase = backendUrl.endsWith('/') ? backendUrl.slice(0, -1) : backendUrl;
+      const checkRes = await fetch(`${apiBase}/api/users/check/${encodeURIComponent(username.trim())}`);
       const { exists } = await checkRes.json();
 
       if (exists) {

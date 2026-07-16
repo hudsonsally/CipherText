@@ -1,66 +1,99 @@
-import { spawn, ChildProcess } from 'child_process';
+import express from 'express';
+import { createServer } from 'http';
 import path from 'path';
+import { spawn } from 'child_process';
+import httpProxy from 'http-proxy';
+import { createServer as createViteServer } from 'vite';
+import dotenv from 'dotenv';
 
+dotenv.config();
+
+const PORT = 3000;
+const FASTAPI_PORT = 3001;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
-async function main() {
-  const children: ChildProcess[] = [];
+async function startServer() {
+  console.log('[PROXY SERVER] Spawning FastAPI backend server...');
 
-  const cleanup = () => {
-    console.log('[LAUNCHER] Shutting down child processes...');
-    for (const child of children) {
-      if (child && !child.killed) {
-        child.kill();
-      }
-    }
-  };
-
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
-  process.on('exit', cleanup);
-
-  if (NODE_ENV !== 'production') {
-    console.log('[LAUNCHER] Starting CipherChat in DEVELOPMENT mode...');
-
-    // 1. Start Vite Dev Server on Port 3001
-    console.log('[LAUNCHER] Spawning Vite development server on port 3001...');
-    const viteProcess = spawn('npx', ['vite', '--port', '3001', '--host', '0.0.0.0'], {
-      stdio: 'inherit',
-      shell: true,
-      env: { ...process.env, PORT: '3001' }
-    });
-    children.push(viteProcess);
-
-    viteProcess.on('exit', (code) => {
-      console.log(`[LAUNCHER] Vite server exited with code ${code}`);
-      cleanup();
-      process.exit(code || 0);
-    });
-  } else {
-    console.log('[LAUNCHER] Starting CipherChat in PRODUCTION mode...');
-  }
-
-  // 2. Start Python FastAPI Server on Port 3000
-  console.log('[LAUNCHER] Spawning FastAPI Uvicorn server on port 3000...');
-  const fastapiProcess = spawn('python3', [
-    '-m', 'uvicorn', 'server:app',
-    '--port', '3000',
-    '--host', '0.0.0.0',
+  // Start FastAPI backend server on port 3001
+  const pythonProcess = spawn('python3', [
+    '-m', 'uvicorn',
+    'server:app',
+    '--host', '127.0.0.1',
+    '--port', String(FASTAPI_PORT),
     '--log-level', 'info'
   ], {
     stdio: 'inherit',
-    shell: true
+    env: { ...process.env }
   });
-  children.push(fastapiProcess);
 
-  fastapiProcess.on('exit', (code) => {
-    console.log(`[LAUNCHER] FastAPI server exited with code ${code}`);
-    cleanup();
-    process.exit(code || 0);
+  pythonProcess.on('error', (err) => {
+    console.error('[PROXY SERVER] Failed to start FastAPI process:', err);
+  });
+
+  pythonProcess.on('exit', (code, signal) => {
+    console.log(`[PROXY SERVER] FastAPI process exited with code ${code} and signal ${signal}`);
+  });
+
+  // Ensure python process is terminated when node process exits
+  process.on('exit', () => {
+    pythonProcess.kill();
+  });
+
+  const app = express();
+  const httpServer = createServer(app);
+
+  // Initialize HTTP/WS proxy pointing to FastAPI
+  const proxy = httpProxy.createProxyServer({});
+
+  // Proxy API requests to FastAPI backend
+  app.all('/api/*', (req, res) => {
+    proxy.web(req, res, { target: `http://127.0.0.1:${FASTAPI_PORT}` }, (err) => {
+      console.error('[PROXY SERVER] Error proxying API request:', err);
+      if (!res.headersSent) {
+        res.status(502).json({ error: 'FastAPI server is starting up or currently unreachable.' });
+      }
+    });
+  });
+
+  // Handle WebSocket upgrade proxying to FastAPI backend
+  httpServer.on('upgrade', (request, socket, head) => {
+    const { pathname } = new URL(request.url || '', `http://${request.headers.host}`);
+    if (pathname === '/ws') {
+      proxy.ws(request, socket, head, { target: `ws://127.0.0.1:${FASTAPI_PORT}` }, (err) => {
+        console.error('[PROXY SERVER] Error proxying WebSocket connection:', err);
+        socket.destroy();
+      });
+    } else {
+      socket.destroy();
+    }
+  });
+
+  // Handle static assets/Vite middleware depending on environment
+  if (NODE_ENV !== 'production') {
+    console.log('[PROXY SERVER] Mounting Vite development server as middleware...');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa'
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    console.log(`[PROXY SERVER] Operating in production. Serving static files from ${distPath}`);
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  // Start the reverse proxy server on PORT (3000)
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`[PROXY SERVER] Gateway successfully running on http://localhost:${PORT}`);
+    console.log(`[PROXY SERVER] Routing /api/* and /ws to FastAPI on port ${FASTAPI_PORT}`);
   });
 }
 
-main().catch((err) => {
-  console.error('[LAUNCHER] Unexpected error in launcher:', err);
+startServer().catch((err) => {
+  console.error('[PROXY SERVER] Critical error starting proxy gateway:', err);
   process.exit(1);
 });
