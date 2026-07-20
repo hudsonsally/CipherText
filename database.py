@@ -115,6 +115,7 @@ def map_user(row) -> dict:
     return {
         "id": row["id"],
         "username": row["username"],
+        "password": row["password"] if "password" in row else "",
         "publicKey": row["public_key"],
         "isOnline": row["is_online"],
         "lastSeen": int(row["last_seen"])
@@ -182,11 +183,14 @@ class DatabaseService:
                     CREATE TABLE IF NOT EXISTS users (
                         id TEXT PRIMARY KEY,
                         username TEXT UNIQUE NOT NULL,
+                        password TEXT NOT NULL DEFAULT '',
                         public_key TEXT NOT NULL,
                         is_online BOOLEAN NOT NULL DEFAULT false,
                         last_seen BIGINT NOT NULL
                     )
                 """)
+                # Alter table to add password if it doesn't exist for existing databases
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS password TEXT NOT NULL DEFAULT ''")
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS rooms (
                         id TEXT PRIMARY KEY,
@@ -270,14 +274,15 @@ class DatabaseService:
         if self.is_postgres:
             async with pool.acquire() as conn:
                 await conn.execute("""
-                    INSERT INTO users (id, username, public_key, is_online, last_seen)
-                    VALUES ($1, $2, $3, $4, $5)
+                    INSERT INTO users (id, username, password, public_key, is_online, last_seen)
+                    VALUES ($1, $2, $3, $4, $5, $6)
                     ON CONFLICT (id) DO UPDATE SET
                         username = EXCLUDED.username,
+                        password = EXCLUDED.password,
                         public_key = EXCLUDED.public_key,
                         is_online = EXCLUDED.is_online,
                         last_seen = EXCLUDED.last_seen
-                """, user["id"], user["username"], user["publicKey"], user["isOnline"], user["lastSeen"])
+                """, user["id"], user["username"], user.get("password", ""), user["publicKey"], user["isOnline"], user["lastSeen"])
         else:
             user_id = user["id"]
             memory_db["users"][user_id] = user

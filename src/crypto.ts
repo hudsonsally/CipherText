@@ -97,6 +97,37 @@ export async function generateRSAKeyPair(): Promise<RSAKeyPair> {
 }
 
 /**
+ * Exports an RSA private key to a JWK string.
+ */
+export async function exportRSAPrivateKey(privateKey: CryptoKey): Promise<string> {
+  if (!hasSecureCrypto) {
+    return (privateKey as any).secretData || 'mock-private-key';
+  }
+  const exported = await window.crypto.subtle.exportKey('jwk', privateKey);
+  return JSON.stringify(exported);
+}
+
+/**
+ * Imports an RSA private key JWK string into a CryptoKey object.
+ */
+export async function importRSAPrivateKey(jwkString: string): Promise<CryptoKey> {
+  if (!hasSecureCrypto) {
+    return new MockCryptoKey('private', 'RSA-OAEP', jwkString, ['decrypt']) as any as CryptoKey;
+  }
+  const jwk = JSON.parse(jwkString);
+  return await window.crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    {
+      name: 'RSA-OAEP',
+      hash: 'SHA-256',
+    },
+    true,
+    ['decrypt']
+  );
+}
+
+/**
  * Imports an RSA public key JWK string into a CryptoKey object.
  */
 export async function importRSAPublicKey(jwkString: string): Promise<CryptoKey> {

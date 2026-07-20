@@ -73,6 +73,91 @@ async def startup_event():
     logger.info("[SERVER] Initializing database service...")
     await db_service.initialize()
 
+from pydantic import BaseModel
+import hashlib
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    publicKey: str
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    publicKey: Optional[str] = None
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+
+@app.post("/api/auth/register")
+async def register_user(req: RegisterRequest):
+    username = req.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+    
+    # Check if user already exists
+    existing_user = await db_service.get_user_by_username(username)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username is already taken")
+    
+    # Hash password
+    hashed = hash_password(req.password)
+    
+    user_id = f"usr_{os.urandom(4).hex()}"
+    user = {
+        "id": user_id,
+        "username": username,
+        "password": hashed,
+        "publicKey": req.publicKey,
+        "isOnline": False,
+        "lastSeen": int(asyncio.get_event_loop().time() * 1000)
+    }
+    
+    await db_service.save_user(user)
+    return {
+        "id": user_id,
+        "username": username,
+        "publicKey": req.publicKey,
+        "isOnline": False,
+        "lastSeen": user["lastSeen"]
+    }
+
+@app.post("/api/auth/login")
+async def login_user(req: LoginRequest):
+    username = req.username.strip()
+    user = await db_service.get_user_by_username(username)
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid username or password")
+    
+    hashed = hash_password(req.password)
+    stored_password = user.get("password", "")
+    
+    # If the user record has a password, verify it
+    if stored_password and stored_password != hashed:
+        raise HTTPException(status_code=400, detail="Invalid username or password")
+    
+    # Update public key if they logged in with a new/different one
+    updated = False
+    if req.publicKey and req.publicKey != user.get("publicKey"):
+        user["publicKey"] = req.publicKey
+        updated = True
+        
+    if not stored_password:
+        # If the user was migrated/had no password, set it now
+        user["password"] = hashed
+        updated = True
+        
+    if updated:
+        await db_service.save_user(user)
+        
+    return {
+        "id": user["id"],
+        "username": user["username"],
+        "publicKey": user["publicKey"],
+        "isOnline": user["isOnline"],
+        "lastSeen": user["lastSeen"]
+    }
+
 @app.get("/api/health")
 async def health_check():
     try:
