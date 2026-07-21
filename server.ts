@@ -16,7 +16,8 @@ async function startServer() {
   console.log('[PROXY SERVER] Spawning FastAPI backend server...');
 
   // Start FastAPI backend server on port 3001
-  const pythonProcess = spawn('python3', [
+  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+  const pythonProcess = spawn(pythonCmd, [
     '-m', 'uvicorn',
     'server:app',
     '--host', '127.0.0.1',
