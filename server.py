@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import asyncio
+import time
 from typing import Dict, List, Set, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -110,7 +111,7 @@ async def register_user(req: RegisterRequest):
         "password": hashed,
         "publicKey": req.publicKey,
         "isOnline": False,
-        "lastSeen": int(asyncio.get_event_loop().time() * 1000)
+        "lastSeen": int(time.time() * 1000)
     }
     
     await db_service.save_user(user)
@@ -239,7 +240,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 if user:
                     user["publicKey"] = public_key
                     user["isOnline"] = True
-                    user["lastSeen"] = int(asyncio.get_event_loop().time() * 1000) # milliseconds
+                    user["lastSeen"] = int(time.time() * 1000) # milliseconds
                 else:
                     id_to_use = user_id or f"usr_{os.urandom(4).hex()}"
                     user = {
@@ -247,7 +248,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         "username": username,
                         "publicKey": public_key,
                         "isOnline": True,
-                        "lastSeen": int(asyncio.get_event_loop().time() * 1000)
+                        "lastSeen": int(time.time() * 1000)
                     }
 
                 await db_service.save_user(user)
@@ -318,7 +319,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "participants": full_participants,
                     "encryptedKeys": encrypted_keys,
                     "keyIv": key_iv,
-                    "createdAt": int(asyncio.get_event_loop().time() * 1000),
+                    "createdAt": int(time.time() * 1000),
                     "lastReadMessageId": {}
                 }
 
@@ -340,7 +341,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "senderUsername": "System",
                     "encryptedText": "",
                     "iv": "",
-                    "timestamp": int(asyncio.get_event_loop().time() * 1000),
+                    "timestamp": int(time.time() * 1000),
                     "isSystem": True
                 }
 
@@ -392,15 +393,17 @@ async def websocket_endpoint(websocket: WebSocket):
                     "senderUsername": sender_user["username"] if sender_user else "Unknown",
                     "encryptedText": encrypted_text,
                     "iv": iv,
-                    "timestamp": int(asyncio.get_event_loop().time() * 1000)
+                    "timestamp": int(time.time() * 1000)
                 }
 
-                await db_service.save_message(new_message)
-
+                # Broadcast immediately to all participants first for instant, real-time response!
                 for p_id in room["participants"]:
                     await manager.send_event_to_user(p_id, "server:message_receive", {
                         "message": new_message
                     })
+
+                # Save to database in the background to avoid blocking the WebSocket event loop
+                asyncio.create_task(db_service.save_message(new_message))
 
             elif event_type == "client:message_delete":
                 if not current_user_id:
@@ -436,16 +439,19 @@ async def websocket_endpoint(websocket: WebSocket):
                     }))
                     continue
 
-                msg["deletedAt"] = int(asyncio.get_event_loop().time() * 1000)
+                msg["deletedAt"] = int(time.time() * 1000)
                 msg["encryptedText"] = ""
                 msg["iv"] = ""
-                await db_service.save_message(msg)
 
+                # Broadcast deletion instantly first
                 for p_id in room["participants"]:
                     await manager.send_event_to_user(p_id, "server:message_deleted", {
                         "roomId": room_id,
                         "messageId": message_id
                     })
+
+                # Save deletion status asynchronously in background
+                asyncio.create_task(db_service.save_message(msg))
 
             elif event_type == "client:read_receipt":
                 if not current_user_id:
@@ -460,8 +466,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 room["lastReadMessageId"] = room.get("lastReadMessageId", {})
                 room["lastReadMessageId"][current_user_id] = message_id
-                await db_service.save_room(room)
 
+                # Broadcast confirmation first
                 for p_id in room["participants"]:
                     if p_id != current_user_id:
                         await manager.send_event_to_user(p_id, "server:read_receipt", {
@@ -469,6 +475,9 @@ async def websocket_endpoint(websocket: WebSocket):
                             "userId": current_user_id,
                             "messageId": message_id
                         })
+
+                # Save room state asynchronously in background
+                asyncio.create_task(db_service.save_room(room))
 
             elif event_type == "client:typing":
                 if not current_user_id:
@@ -504,7 +513,7 @@ async def websocket_endpoint(websocket: WebSocket):
             user = await db_service.get_user_by_id(current_user_id)
             if user:
                 user["isOnline"] = False
-                user["lastSeen"] = int(asyncio.get_event_loop().time() * 1000)
+                user["lastSeen"] = int(time.time() * 1000)
                 await db_service.save_user(user)
 
                 await manager.broadcast_event("server:user_presence", {
