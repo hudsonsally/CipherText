@@ -112,10 +112,11 @@ pool: Optional[asyncpg.Pool] = None
 
 # DB Row Mappers
 def map_user(row) -> dict:
+    has_password = 'password' in row.keys() if hasattr(row, 'keys') else ('password' in row)
     return {
         "id": row["id"],
         "username": row["username"],
-        "password": row["password"] if "password" in row else "",
+        "password": row["password"] if has_password else "",
         "publicKey": row["public_key"],
         "isOnline": row["is_online"],
         "lastSeen": int(row["last_seen"])

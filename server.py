@@ -92,36 +92,42 @@ def hash_password(password: str) -> str:
 
 @app.post("/api/auth/register")
 async def register_user(req: RegisterRequest):
-    username = req.username.strip()
-    if not username:
-        raise HTTPException(status_code=400, detail="Username cannot be empty")
-    
-    # Check if user already exists
-    existing_user = await db_service.get_user_by_username(username)
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Username is already taken")
-    
-    # Hash password
-    hashed = hash_password(req.password)
-    
-    user_id = f"usr_{os.urandom(4).hex()}"
-    user = {
-        "id": user_id,
-        "username": username,
-        "password": hashed,
-        "publicKey": req.publicKey,
-        "isOnline": False,
-        "lastSeen": int(time.time() * 1000)
-    }
-    
-    await db_service.save_user(user)
-    return {
-        "id": user_id,
-        "username": username,
-        "publicKey": req.publicKey,
-        "isOnline": False,
-        "lastSeen": user["lastSeen"]
-    }
+    try:
+        username = req.username.strip()
+        if not username:
+            raise HTTPException(status_code=400, detail="Username cannot be empty")
+        
+        # Check if user already exists
+        existing_user = await db_service.get_user_by_username(username)
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Username is already taken")
+        
+        # Hash password
+        hashed = hash_password(req.password)
+        
+        user_id = f"usr_{os.urandom(4).hex()}"
+        user = {
+            "id": user_id,
+            "username": username,
+            "password": hashed,
+            "publicKey": req.publicKey,
+            "isOnline": False,
+            "lastSeen": int(time.time() * 1000)
+        }
+        
+        await db_service.save_user(user)
+        return {
+            "id": user_id,
+            "username": username,
+            "publicKey": req.publicKey,
+            "isOnline": False,
+            "lastSeen": user["lastSeen"]
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"[SERVER] Exception during user registration: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 @app.post("/api/auth/login")
 async def login_user(req: LoginRequest):
